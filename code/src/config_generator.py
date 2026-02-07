@@ -146,119 +146,24 @@ class ConfigGenerator:
 
     @staticmethod
     def _build_environment(analysis: AnalysisResult) -> dict:
-        # Parse base image into registry + image parts
-        parts = analysis.base_image.split("/", 1)
-        registry = parts[0] if len(parts) > 1 else "nvcr.io"
-        image = parts[1] if len(parts) > 1 else parts[0]
-
-        # CPU-only setup - ignore GPU detection
-        labels = ["ubuntu"]
-        if "python" in analysis.languages:
-            labels.append("python3")
-        if "javascript" in analysis.languages or "typescript" in analysis.languages:
-            labels.append("nodejs")
-        if "pytorch" in analysis.detected_frameworks:
-            labels.append("pytorch")
-        if "tensorflow" in analysis.detected_frameworks:
-            labels.append("tensorflow")
-
-        # Build base apps (JupyterLab comes with python-basic)
-        base_apps = []
-        if "python-basic" in analysis.base_image:
-            base_apps.append({
-                "name": "jupyterlab",
-                "type": "jupyterlab",
-                "class": "webapp",
-                "start_command": "jupyter lab --allow-root --port 8888 --ip 0.0.0.0 --no-browser --NotebookApp.base_url=\\$PROXY_PREFIX --NotebookApp.default_url=/lab --NotebookApp.allow_origin='*'",
-                "health_check_command": "[ \\$(echo url=\\$(jupyter lab list | head -n 2 | tail -n 1 | cut -f1 -d'' '' | grep -v ''Currently'' | sed \"s@/?@/lab?@g\") | curl -o /dev/null -s -w ''%{http_code}'' --config -) == ''200'' ]",
-                "stop_command": "jupyter lab stop 8888",
-                "user_msg": "",
-                "logfile_path": "",
-                "timeout_seconds": 60,
-                "icon_url": "",
-                "webapp_options": {
-                    "autolaunch": False,
-                    "port": "8888",
-                    "proxy": {"trim_prefix": False},
-                    "url_command": "jupyter lab list | head -n 2 | tail -n 1 | cut -f1 -d' ' | grep -v 'Currently'",
-                },
-            })
-
-        env = {
+        """Build environment section with only required fields per Workbench docs."""
+        return {
             "base": {
-                "registry": registry,
-                "image": image,
-                "build_timestamp": "",
-                "name": ConfigGenerator._friendly_image_name(image),
-                "supported_architectures": ["amd64"],
-                "cuda_version": analysis.cuda_version,
-                "description": f"NVIDIA {ConfigGenerator._friendly_image_name(image)} Container",
-                "entrypoint_script": "",
-                "labels": labels,
-                "apps": base_apps,
-                "programming_languages": ConfigGenerator._programming_languages(analysis),
-                "icon_url": "",
-                "image_version": "",
+                "registry": "nvcr.io",
+                "image": "nvidia/ai-workbench/python-basic:1.0.2",
+                "name": "Python Basic",
+                "description": "A Python Base with Jupyterlab",
                 "os": "linux",
                 "os_distro": "ubuntu",
                 "os_distro_release": "22.04",
                 "schema_version": "v2",
-                "user_info": {"uid": "", "gid": "", "username": ""},
-                "package_managers": [
-                    {
-                        "name": "apt",
-                        "binary_path": "/usr/bin/apt",
-                        "installed_packages": analysis.system_packages,
-                    },
-                    {
-                        "name": "pip",
-                        "binary_path": "/usr/local/bin/pip",
-                        "installed_packages": [],
-                    },
-                ],
-                "package_manager_environment": {"name": "", "target": ""},
             },
-            "compose_file_path": "",
         }
-
-        # Add secrets for common API keys
-        # No GPU secrets needed for CPU-only setup
-        env["secrets"] = []
-
-        return env
 
     @staticmethod
     def _build_execution(analysis: AnalysisResult) -> dict:
-        apps = []
-
-        # Generate app entries for each detected entry point
-        for ep in analysis.entry_points:
-            app = ConfigGenerator._app_for_entry_point(ep, analysis)
-            if app:
-                apps.append(app)
-
-        # Always include VS Code
-        apps.append({
-            "name": "VS Code",
-            "type": "vs-code",
-            "class": "native",
-            "start_command": "",
-            "health_check_command": "[ \\$(ps aux | grep \".vscode-server\" | grep -v grep | wc -l ) -gt 4 ] && [ \\$(ps aux | grep \"/.vscode-server/bin/.*/node .* net.createConnection\" | grep -v grep | wc -l) -gt 0 ]",
-            "stop_command": "",
-            "user_msg": "",
-            "logfile_path": "",
-            "timeout_seconds": 120,
-            "icon_url": "",
-        })
-
-        # Always use CPU-only resources
+        """Build execution section - only project mount is required per docs."""
         return {
-            "apps": apps,
-            "resources": {
-                "gpu": {"requested": 0},
-                "sharedMemoryMB": 1024,
-            },
-            "secrets": [],
             "mounts": [
                 {"type": "project", "target": "/project/", "description": "Project directory", "options": "rw"},
             ],
