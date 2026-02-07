@@ -254,11 +254,11 @@ if st.session_state.analysis and st.session_state.repo_info:
 
                 # Root-level stubs (reference project has these too)
                 root_pb = root / "postBuild.bash"
-                root_pb.write_text(ConfigGenerator.generate_prebuild_bash())  # stub
+                root_pb.write_text(ConfigGenerator.generate_postbuild_bash(analysis))
                 root_pb.chmod(0o755)
 
                 root_pre = root / "preBuild.bash"
-                root_pre.write_text(ConfigGenerator.generate_prebuild_bash())  # stub
+                root_pre.write_text(ConfigGenerator.generate_prebuild_bash())
                 root_pre.chmod(0o755)
 
                 (root / "variables.env").write_text(ConfigGenerator.generate_variables_env())
