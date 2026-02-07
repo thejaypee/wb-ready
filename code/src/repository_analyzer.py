@@ -109,6 +109,15 @@ class RepositoryAnalyzer:
             result.node_scripts = self._parse_node_scripts()
             result.entry_points.extend(self._find_node_entry_points(result))
 
+        if "go" in result.languages:
+            result.entry_points.extend(self._find_go_entry_points())
+        if "rust" in result.languages:
+            result.entry_points.extend(self._find_rust_entry_points())
+        if "java" in result.languages:
+            result.entry_points.extend(self._find_java_entry_points())
+        if "ruby" in result.languages:
+            result.entry_points.extend(self._find_ruby_entry_points())
+
         result.system_packages = self._suggest_system_packages(result)
         result.base_image = self._suggest_base_image(result)
         if result.has_gpu_requirements:
@@ -302,6 +311,57 @@ class RepositoryAnalyzer:
 
         return entry_points
 
+    def _find_go_entry_points(self) -> list[dict[str, str]]:
+        entry_points = []
+        # Check for go.mod (Go modules project)
+        if (self.repo_path / "go.mod").exists():
+            # Look for main.go or cmd/ pattern
+            for fpath in self.repo_path.rglob("main.go"):
+                parts = fpath.parts
+                if any(skip in parts for skip in ("vendor", ".git", "node_modules")):
+                    continue
+                rel = fpath.relative_to(self.repo_path)
+                entry_points.append({
+                    "file": str(rel.parent) if str(rel.parent) != "." else ".",
+                    "type": "go",
+                    "name": "Go App",
+                })
+                break  # One entry point is enough
+        if not entry_points and (self.repo_path / "Makefile").exists():
+            entry_points.append({"file": "Makefile", "type": "go-make", "name": "Go App"})
+        return entry_points
+
+    def _find_rust_entry_points(self) -> list[dict[str, str]]:
+        entry_points = []
+        cargo = self.repo_path / "Cargo.toml"
+        if cargo.exists():
+            entry_points.append({"file": "Cargo.toml", "type": "rust", "name": "Rust App"})
+        return entry_points
+
+    def _find_java_entry_points(self) -> list[dict[str, str]]:
+        entry_points = []
+        if (self.repo_path / "pom.xml").exists():
+            entry_points.append({"file": "pom.xml", "type": "maven", "name": "Java App"})
+        elif (self.repo_path / "build.gradle").exists() or (self.repo_path / "build.gradle.kts").exists():
+            entry_points.append({"file": "build.gradle", "type": "gradle", "name": "Java App"})
+        return entry_points
+
+    def _find_ruby_entry_points(self) -> list[dict[str, str]]:
+        entry_points = []
+        if (self.repo_path / "Gemfile").exists():
+            # Check for Rails
+            try:
+                gemfile = (self.repo_path / "Gemfile").read_text(errors="ignore")
+                if "rails" in gemfile.lower():
+                    entry_points.append({"file": "Gemfile", "type": "rails", "name": "Rails App"})
+                elif "sinatra" in gemfile.lower():
+                    entry_points.append({"file": "Gemfile", "type": "sinatra", "name": "Sinatra App"})
+                else:
+                    entry_points.append({"file": "Gemfile", "type": "ruby", "name": "Ruby App"})
+            except Exception:
+                entry_points.append({"file": "Gemfile", "type": "ruby", "name": "Ruby App"})
+        return entry_points
+
     @staticmethod
     def _extract_port(command: str, default: int) -> int:
         """Try to find a port number in a command string."""
@@ -323,7 +383,11 @@ class RepositoryAnalyzer:
         if "go" in result.languages:
             pkgs.append("golang")
         if "rust" in result.languages:
-            pkgs.append("rustc")
+            pkgs.extend(["build-essential", "pkg-config", "libssl-dev"])
+        if "java" in result.languages:
+            pkgs.extend(["openjdk-17-jdk", "maven"])
+        if "ruby" in result.languages:
+            pkgs.extend(["ruby-full", "build-essential"])
         if result.has_gpu_requirements:
             pkgs.append("nvidia-cuda-toolkit")
         return sorted(set(pkgs))

@@ -229,6 +229,70 @@ class ConfigGenerator:
             }
         elif t in ("nextjs", "nuxt", "vite", "node-server", "node-app"):
             return ConfigGenerator._node_app_entry(ep, analysis)
+        elif t == "go":
+            pkg = ep["file"]
+            return {
+                "name": name, "type": "custom", "class": "webapp",
+                "start_command": f"cd /project && go run ./{pkg}",
+                "health_check_command": "curl -f http://localhost:8080/",
+                "stop_command": "pkill -f 'go run'",
+                "user_msg": "", "logfile_path": "", "timeout_seconds": 120, "icon_url": "",
+                "webapp_options": {"autolaunch": True, "port": "8080", "proxy": {"trim_prefix": False}, "url": "http://localhost:8080"},
+            }
+        elif t == "go-make":
+            return {
+                "name": name, "type": "custom", "class": "webapp",
+                "start_command": "cd /project && make run",
+                "health_check_command": "curl -f http://localhost:8080/",
+                "stop_command": "pkill -f '/project'",
+                "user_msg": "", "logfile_path": "", "timeout_seconds": 120, "icon_url": "",
+                "webapp_options": {"autolaunch": True, "port": "8080", "proxy": {"trim_prefix": False}, "url": "http://localhost:8080"},
+            }
+        elif t == "rust":
+            return {
+                "name": name, "type": "custom", "class": "webapp",
+                "start_command": "cd /project && cargo run --release",
+                "health_check_command": "curl -f http://localhost:8080/",
+                "stop_command": "pkill -f 'target/release'",
+                "user_msg": "", "logfile_path": "", "timeout_seconds": 180, "icon_url": "",
+                "webapp_options": {"autolaunch": True, "port": "8080", "proxy": {"trim_prefix": False}, "url": "http://localhost:8080"},
+            }
+        elif t == "maven":
+            return {
+                "name": name, "type": "custom", "class": "webapp",
+                "start_command": "cd /project && mvn spring-boot:run",
+                "health_check_command": "curl -f http://localhost:8080/",
+                "stop_command": "pkill -f 'spring-boot'",
+                "user_msg": "", "logfile_path": "", "timeout_seconds": 180, "icon_url": "",
+                "webapp_options": {"autolaunch": True, "port": "8080", "proxy": {"trim_prefix": False}, "url": "http://localhost:8080"},
+            }
+        elif t == "gradle":
+            return {
+                "name": name, "type": "custom", "class": "webapp",
+                "start_command": "cd /project && ./gradlew bootRun",
+                "health_check_command": "curl -f http://localhost:8080/",
+                "stop_command": "pkill -f 'gradlew'",
+                "user_msg": "", "logfile_path": "", "timeout_seconds": 180, "icon_url": "",
+                "webapp_options": {"autolaunch": True, "port": "8080", "proxy": {"trim_prefix": False}, "url": "http://localhost:8080"},
+            }
+        elif t == "rails":
+            return {
+                "name": name, "type": "custom", "class": "webapp",
+                "start_command": "cd /project && bundle exec rails server -b 0.0.0.0 -p 3000",
+                "health_check_command": "curl -f http://localhost:3000/",
+                "stop_command": "pkill -f 'rails server'",
+                "user_msg": "", "logfile_path": "", "timeout_seconds": 120, "icon_url": "",
+                "webapp_options": {"autolaunch": True, "port": "3000", "proxy": {"trim_prefix": False}, "url": "http://localhost:3000"},
+            }
+        elif t == "sinatra":
+            return {
+                "name": name, "type": "custom", "class": "webapp",
+                "start_command": "cd /project && bundle exec ruby app.rb -o 0.0.0.0 -p 4567",
+                "health_check_command": "curl -f http://localhost:4567/",
+                "stop_command": "pkill -f sinatra",
+                "user_msg": "", "logfile_path": "", "timeout_seconds": 60, "icon_url": "",
+                "webapp_options": {"autolaunch": True, "port": "4567", "proxy": {"trim_prefix": False}, "url": "http://localhost:4567"},
+            }
         return None
 
     @staticmethod
@@ -279,12 +343,13 @@ class ConfigGenerator:
     @staticmethod
     def _programming_languages(analysis: AnalysisResult) -> list[str]:
         langs = []
-        if "python" in analysis.languages:
-            langs.append("python3")
-        if "javascript" in analysis.languages:
-            langs.append("javascript")
-        if "typescript" in analysis.languages:
-            langs.append("typescript")
+        lang_map = {
+            "python": "python3", "javascript": "javascript", "typescript": "typescript",
+            "go": "go", "rust": "rust", "java": "java", "ruby": "ruby", "cpp": "cpp",
+        }
+        for detected, label in lang_map.items():
+            if detected in analysis.languages:
+                langs.append(label)
         return langs
 
     @staticmethod
@@ -386,6 +451,56 @@ class ConfigGenerator:
                 "if [ -f /project/requirements.txt ]; then",
                 '    echo "Installing project requirements..."',
                 "    pip install -r /project/requirements.txt",
+                "fi",
+            ])
+
+        if "go" in analysis.languages:
+            lines.extend([
+                "",
+                "# Install Go dependencies",
+                "if [ -f /project/go.mod ]; then",
+                '    echo "Downloading Go modules..."',
+                "    cd /project && go mod download",
+                "fi",
+            ])
+
+        if "rust" in analysis.languages:
+            lines.extend([
+                "",
+                "# Install Rust toolchain",
+                "if ! command -v rustc &> /dev/null; then",
+                '    echo "Installing Rust..."',
+                "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y",
+                '    source "$HOME/.cargo/env"',
+                "fi",
+                "# Build Rust project",
+                "if [ -f /project/Cargo.toml ]; then",
+                '    echo "Building Rust project..."',
+                "    cd /project && cargo build --release",
+                "fi",
+            ])
+
+        if "java" in analysis.languages:
+            lines.extend([
+                "",
+                "# Install Java (OpenJDK)",
+                "if ! command -v java &> /dev/null; then",
+                '    echo "Installing OpenJDK..."',
+                "    apt-get install -y -qq openjdk-17-jdk maven",
+                "fi",
+            ])
+
+        if "ruby" in analysis.languages:
+            lines.extend([
+                "",
+                "# Install Ruby and Bundler",
+                "if ! command -v ruby &> /dev/null; then",
+                '    echo "Installing Ruby..."',
+                "    apt-get install -y -qq ruby-full",
+                "fi",
+                "if [ -f /project/Gemfile ]; then",
+                '    echo "Installing Ruby gems..."',
+                "    cd /project && gem install bundler && bundle install",
                 "fi",
             ])
 
