@@ -1,7 +1,23 @@
 """Generates NVIDIA AI Workbench configuration files from analysis results."""
 
+from datetime import datetime, timezone
 import yaml
 from repository_analyzer import AnalysisResult
+
+
+class _WorkbenchDumper(yaml.SafeDumper):
+    """Custom YAML dumper matching Workbench's 4-space indent with proper list formatting."""
+    pass
+
+
+def _str_representer(dumper, data):
+    """Quote strings that contain special chars, leave others unquoted."""
+    if any(c in data for c in ":{}\n\\$%") or data == "":
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style='"')
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
+_WorkbenchDumper.add_representer(str, _str_representer)
 
 
 class ConfigGenerator:
@@ -23,7 +39,7 @@ class ConfigGenerator:
                 "image": f"project-{project_name}",
                 "description": description or f"Workbench project: {project_name}",
                 "labels": [],
-                "createdOn": "",
+                "createdOn": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "defaultBranch": default_branch,
             },
             "layout": [
@@ -35,7 +51,98 @@ class ConfigGenerator:
             "environment": ConfigGenerator._build_environment(analysis),
             "execution": ConfigGenerator._build_execution(analysis),
         }
-        return yaml.dump(spec, default_flow_style=False, sort_keys=False, width=120)
+        return ConfigGenerator._render_spec(spec)
+
+    @staticmethod
+    def _render_spec(spec: dict) -> str:
+        """Render spec dict as YAML matching Workbench's exact formatting (4-space indent)."""
+
+        def _render_value(val, indent, inline_key=False):
+            """Render a YAML value. Returns list of lines."""
+            if isinstance(val, dict):
+                return _render_dict(val, indent)
+            elif isinstance(val, list):
+                return _render_list(val, indent)
+            else:
+                return []  # scalar handled inline
+
+        def _render_dict(d, indent):
+            pad = "    " * indent
+            lines = []
+            for key, val in d.items():
+                if isinstance(val, dict):
+                    lines.append(f"{pad}{key}:")
+                    lines.extend(_render_dict(val, indent + 1))
+                elif isinstance(val, list):
+                    if not val:
+                        lines.append(f"{pad}{key}: []")
+                    else:
+                        lines.append(f"{pad}{key}:")
+                        lines.extend(_render_list(val, indent + 1))
+                else:
+                    lines.append(f"{pad}{key}: {_quote(val)}")
+            return lines
+
+        def _render_list(lst, indent):
+            pad = "    " * indent
+            lines = []
+            for item in lst:
+                if isinstance(item, dict):
+                    first = True
+                    for k, v in item.items():
+                        if first:
+                            prefix = f"{pad}- "
+                            first = False
+                        else:
+                            prefix = f"{pad}  "
+                        if isinstance(v, dict):
+                            lines.append(f"{prefix}{k}:")
+                            lines.extend(_render_dict(v, indent + 1))
+                        elif isinstance(v, list):
+                            if not v:
+                                lines.append(f"{prefix}{k}: []")
+                            else:
+                                lines.append(f"{prefix}{k}:")
+                                lines.extend(_render_list(v, indent + 1))
+                        else:
+                            lines.append(f"{prefix}{k}: {_quote(v)}")
+                else:
+                    lines.append(f"{pad}- {_quote(item)}")
+            return lines
+
+        def _quote(val):
+            if isinstance(val, bool):
+                return "true" if val else "false"
+            if isinstance(val, int):
+                return str(val)
+            if val is None or val == "":
+                return '""'
+            s = str(val)
+            # Quote strings that look like numbers
+            try:
+                float(s)
+                return f'"{s}"'
+            except ValueError:
+                pass
+            # Quote booleans
+            if s.lower() in ("true", "false", "null", "yes", "no"):
+                return f'"{s}"'
+            # Quote strings with special YAML chars that need it
+            if "\n" in s or s.startswith("{") or s.startswith("["):
+                escaped = s.replace('"', '\\"')
+                return f'"{escaped}"'
+            # Use single quotes for strings with shell escapes (like health checks)
+            if "\\$" in s or ("'" in s and "$" in s):
+                return f"'{s}'"
+            # Quote strings containing : that aren't already handled by single-quote path
+            if ":" in s or s.startswith("&") or s.startswith("*"):
+                if "\\$" in s or ("'" in s and "$" in s):
+                    return f"'{s}'"
+                return f'"{s}"'
+            return s
+
+        lines = _render_dict(spec, 0)
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _build_environment(analysis: AnalysisResult) -> dict:
