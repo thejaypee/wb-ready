@@ -46,11 +46,11 @@ environment:
               timeout_seconds: 60
               icon_url: ""
               webapp_options:
-                  autolaunch: true
-                  port: "8888"
-                  proxy:
-                      trim_prefix: false
-                  url_command: jupyter lab list | head -n 2 | tail -n 1 | cut -f1 -d' ' | grep -v 'Currently'
+                autolaunch: true
+                port: "8888"
+                proxy:
+                    trim_prefix: false
+                url_command: jupyter lab list | head -n 2 | tail -n 1 | cut -f1 -d' ' | grep -v 'Currently'
         programming_languages:
             - python3
         icon_url: ""
@@ -67,17 +67,17 @@ environment:
             - name: apt
               binary_path: /usr/bin/apt
               installed_packages:
-                  - curl
-                  - git
-                  - git-lfs
-                  - python3
-                  - gcc
-                  - python3-dev
-                  - python3-pip
+                - curl
+                - git
+                - git-lfs
+                - python3
+                - gcc
+                - python3-dev
+                - python3-pip
             - name: pip
               binary_path: /usr/local/bin/pip
               installed_packages:
-                  - jupyterlab==4.0.7
+                - jupyterlab==4.0.7
         package_manager_environment:
             name: ""
             target: ""
@@ -88,18 +88,18 @@ execution:
           type: custom
           class: webapp
           start_command: cd /project/code && python -m streamlit run src/main.py --server.port=8501 --server.address=0.0.0.0 --server.baseUrlPath=$PROXY_PREFIX
-          health_check_command: curl -f http://localhost:8501/_stcore/health
+          health_check_command: curl -I http://localhost:8501
           stop_command: pkill -f 'streamlit run src/main.py'
           user_msg: ""
           logfile_path: ""
           timeout_seconds: 60
           icon_url: ""
           webapp_options:
-              autolaunch: true
-              port: "8501"
-              proxy:
-                  trim_prefix: false
-              url: http://localhost:8501
+            autolaunch: true
+            port: "8501"
+            proxy:
+                trim_prefix: false
+            url: http://localhost:8501
         - name: VS Code
           type: vs-code
           class: native
