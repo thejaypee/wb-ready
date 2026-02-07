@@ -5,7 +5,7 @@ meta:
     image: project-wb-ready
     description: Universal converter - automatically transforms any GitHub repository into an NVIDIA AI Workbench-ready project
     labels: []
-    createdOn: ""
+    createdOn: "2026-02-07T00:08:00Z"
     defaultBranch: main
 layout:
     - path: code/
