@@ -78,6 +78,11 @@ environment:
               binary_path: /usr/local/bin/pip
               installed_packages:
                 - jupyterlab==4.0.7
+                - streamlit
+                - requests
+                - pyyaml
+                - pygithub
+                - gitpython
         package_manager_environment:
             name: ""
             target: ""
@@ -87,7 +92,7 @@ execution:
         - name: WB-Ready Converter
           type: custom
           class: webapp
-          start_command: cd /project/code && python -m streamlit run src/main.py --server.port=8501 --server.address=0.0.0.0 --server.baseUrlPath=$PROXY_PREFIX
+          start_command: cd /project/code && streamlit run src/main.py --server.baseUrlPath=$PROXY_PREFIX
           health_check_command: curl -I http://localhost:8501
           stop_command: pkill -f 'streamlit run src/main.py'
           user_msg: ""
