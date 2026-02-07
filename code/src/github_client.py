@@ -76,24 +76,23 @@ class GitHubClient:
         user = self.github.get_user()
         repo_name = f"{source_owner}-{source_repo}"
 
-        # Delete existing repo if it exists
+        # Try to use existing repo, or create new one
+        new_repo = None
         try:
-            existing = self.github.get_repo(f"{user.login}/{repo_name}")
-            existing.delete()
-            time.sleep(2)
+            new_repo = self.github.get_repo(f"{user.login}/{repo_name}")
         except GithubException:
             pass
 
-        # Create new empty repo
-        try:
-            new_repo = user.create_repo(
-                repo_name,
-                description=f"Workbench-ready version of {source_owner}/{source_repo}",
-                auto_init=False,
-                private=False,
-            )
-        except GithubException as e:
-            raise ValueError(f"Failed to create repo: {e}") from e
+        if new_repo is None:
+            try:
+                new_repo = user.create_repo(
+                    repo_name,
+                    description=f"Workbench-ready version of {source_owner}/{source_repo}",
+                    auto_init=False,
+                    private=False,
+                )
+            except GithubException as e:
+                raise ValueError(f"Failed to create repo: {e}") from e
 
         # Remove old .git and re-init as a fresh repo
         git_dir = os.path.join(local_clone_path, ".git")
