@@ -71,6 +71,8 @@ class GitHubClient:
 
     def create_fresh_repo(self, source_owner: str, source_repo: str, local_clone_path: str) -> str:
         """Create a new repo with only the latest files (no history). Fast for Workbench cloning."""
+        import shutil
+
         user = self.github.get_user()
         repo_name = f"{source_owner}-{source_repo}"
 
@@ -93,17 +95,20 @@ class GitHubClient:
         except GithubException as e:
             raise ValueError(f"Failed to create repo: {e}") from e
 
-        # Re-init the local clone as a fresh repo pointing to the new remote
-        import shutil
+        # Remove old .git and re-init as a fresh repo
         git_dir = os.path.join(local_clone_path, ".git")
         if os.path.exists(git_dir):
             shutil.rmtree(git_dir)
 
-        repo = git.Repo.init(local_clone_path)
+        repo = git.Repo.init(local_clone_path, initial_branch="main")
         remote_url = new_repo.clone_url
         if self.token and "github.com" in remote_url:
             remote_url = remote_url.replace("https://", f"https://x-access-token:{self.token}@")
         repo.create_remote("origin", remote_url)
+
+        # Configure git user for commit
+        repo.config_writer().set_value("user", "name", "WB-Ready").release()
+        repo.config_writer().set_value("user", "email", "wb-ready@nvidia.com").release()
 
         return new_repo.clone_url
 
@@ -111,11 +116,29 @@ class GitHubClient:
         """Stage all changes, commit, and push."""
         try:
             repo = git.Repo(local_repo_path)
+
+            # Configure git user if not set
+            try:
+                repo.config_reader().get_value("user", "name")
+            except Exception:
+                repo.config_writer().set_value("user", "name", "WB-Ready").release()
+                repo.config_writer().set_value("user", "email", "wb-ready@nvidia.com").release()
+
             repo.git.add(A=True)
-            if not repo.is_dirty(untracked_files=True):
+
+            # For fresh repos with no HEAD, always commit
+            has_head = True
+            try:
+                repo.head.commit
+            except ValueError:
+                has_head = False
+
+            if not has_head or repo.is_dirty(untracked_files=True):
+                repo.index.commit(commit_message)
+            else:
                 return
-            repo.index.commit(commit_message)
+
             origin = repo.remote("origin")
-            origin.push(refspec=f"HEAD:{branch}")
+            origin.push(refspec=f"HEAD:refs/heads/{branch}")
         except git.GitCommandError as e:
             raise ValueError(f"Push failed: {e}") from e
