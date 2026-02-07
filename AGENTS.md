@@ -11,6 +11,7 @@ Key components:
 - `code/src/repository_analyzer.py` - Analyzes repos for languages, frameworks, dependencies
 - `code/src/config_generator.py` - Generates Workbench config files (spec.yaml, apt.txt, etc.)
 - `code/src/github_client.py` - Handles GitHub API operations
+- `code/src/llm_analyzer.py` - Optional LLM enhancement for analysis results
 
 ## Build/Lint/Test Commands
 
@@ -45,6 +46,10 @@ python -c "from src.repository_analyzer import RepositoryAnalyzer; print(Reposit
 # Test config generation
 cd code
 python -c "from src.config_generator import ConfigGenerator; print(ConfigGenerator.generate_spec_yaml('test-project', 'Test desc', analysis_result))"
+
+# Run a single test function (example)
+cd code
+python -c "from src.repository_analyzer import RepositoryAnalyzer; ra = RepositoryAnalyzer('../'); result = ra._detect_languages(); print(result)"
 ```
 
 ### Linting
@@ -56,6 +61,9 @@ flake8 code/
 
 # Example if black was added:
 black --check code/
+
+# Example if pylint was added:
+pylint code/
 ```
 
 ### Type Checking
@@ -200,6 +208,7 @@ Core dependencies are listed in `requirements.txt`:
 - gitpython: Git operations
 - pyyaml: YAML processing
 - requests: HTTP requests
+- jupyterlab: JupyterLab integration
 
 When adding new dependencies:
 1. Pin major.minor versions for stability
@@ -215,7 +224,8 @@ wb-ready/
 │       ├── main.py              # Streamlit UI
 │       ├── github_client.py     # GitHub operations
 │       ├── repository_analyzer.py # Repo analysis
-│       └── config_generator.py  # Config generation
+│       ├── config_generator.py  # Config generation
+│       └── llm_analyzer.py      # LLM enhancement
 ├── .project/                    # Workbench config for this project
 │   ├── spec.yaml
 │   ├── apt.txt

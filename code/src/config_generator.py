@@ -127,17 +127,17 @@ class ConfigGenerator:
             # Quote booleans
             if s.lower() in ("true", "false", "null", "yes", "no"):
                 return f'"{s}"'
+            # Shell commands with \$ need single quotes (double quotes treat \$ as escape).
+            # In YAML single-quoted strings, literal ' is escaped as ''.
+            if "\\$" in s:
+                escaped = s.replace("'", "''")
+                return f"'{escaped}'"
             # Quote strings with special YAML chars that need it
             if "\n" in s or s.startswith("{") or s.startswith("["):
                 escaped = s.replace('"', '\\"')
                 return f'"{escaped}"'
-            # Use single quotes for strings with shell escapes (like health checks)
-            if "\\$" in s or ("'" in s and "$" in s):
-                return f"'{s}'"
             # Quote strings containing : that aren't already handled by single-quote path
             if ":" in s or s.startswith("&") or s.startswith("*"):
-                if "\\$" in s or ("'" in s and "$" in s):
-                    return f"'{s}'"
                 return f'"{s}"'
             return s
 
@@ -146,26 +146,113 @@ class ConfigGenerator:
 
     @staticmethod
     def _build_environment(analysis: AnalysisResult) -> dict:
-        """Build environment section with only required fields per Workbench docs."""
+        """Build environment section matching Workbench reference format."""
+        # Base image packages + project's detected system packages
+        base_apt = ["curl", "git", "git-lfs", "python3", "gcc", "python3-dev", "python3-pip", "vim"]
+        all_apt = sorted(set(base_apt + analysis.system_packages))
+
+        # Base pip packages + project's detected Python packages
+        base_pip = ["jupyterlab==4.0.7"]
+        all_pip = base_pip + analysis.python_packages
+
+        package_managers = [
+            {
+                "name": "apt",
+                "binary_path": "/usr/bin/apt",
+                "installed_packages": all_apt,
+            },
+            {
+                "name": "pip",
+                "binary_path": "/usr/local/bin/pip",
+                "installed_packages": all_pip,
+            },
+        ]
+
+        # JupyterLab app from the base image
+        jupyterlab_app = {
+            "name": "jupyterlab",
+            "type": "jupyterlab",
+            "class": "webapp",
+            "start_command": "jupyter lab --allow-root --port 8888 --ip 0.0.0.0 --no-browser --NotebookApp.base_url=\\$PROXY_PREFIX --NotebookApp.default_url=/lab --NotebookApp.allow_origin='*'",
+            "health_check_command": "[ \\$(echo url=\\$(jupyter lab list | head -n 2 | tail -n 1 | cut -f1 -d' ' | grep -v 'Currently' | sed \"s@/?@/lab?@g\") | curl -o /dev/null -s -w '%{http_code}' --config -) == '200' ]",
+            "stop_command": "jupyter lab stop 8888",
+            "user_msg": "",
+            "logfile_path": "",
+            "timeout_seconds": 60,
+            "icon_url": "",
+            "webapp_options": {
+                "autolaunch": True,
+                "port": "8888",
+                "proxy": {"trim_prefix": False},
+                "url_command": "jupyter lab list | head -n 2 | tail -n 1 | cut -f1 -d' ' | grep -v 'Currently'",
+            },
+        }
+
+        langs = ConfigGenerator._programming_languages(analysis)
+
         return {
             "base": {
                 "registry": "nvcr.io",
                 "image": "nvidia/ai-workbench/python-basic:1.0.2",
+                "build_timestamp": "",
                 "name": "Python Basic",
+                "supported_architectures": [],
+                "cuda_version": analysis.cuda_version or "",
                 "description": "A Python Base with Jupyterlab",
+                "entrypoint_script": "",
+                "labels": ["ubuntu", "python3", "jupyterlab"],
+                "apps": [jupyterlab_app],
+                "programming_languages": langs,
+                "icon_url": "",
+                "image_version": "1.0.2",
                 "os": "linux",
                 "os_distro": "ubuntu",
                 "os_distro_release": "22.04",
                 "schema_version": "v2",
+                "user_info": {"uid": "", "gid": "", "username": ""},
+                "package_managers": package_managers,
+                "package_manager_environment": {"name": "", "target": ""},
             },
+            "compose_file_path": "",
         }
 
     @staticmethod
     def _build_execution(analysis: AnalysisResult) -> dict:
-        """Build execution section - only project mount is required per docs."""
+        """Build execution section with apps, resources, secrets, and mounts."""
+        # Build apps from detected entry points
+        apps = []
+        for ep in analysis.entry_points:
+            app = ConfigGenerator._app_for_entry_point(ep, analysis)
+            if app:
+                apps.append(app)
+
+        # Always include VS Code app
+        vs_code_app = {
+            "name": "VS Code",
+            "type": "vs-code",
+            "class": "native",
+            "start_command": "",
+            "health_check_command": '[ \\$(ps aux | grep ".vscode-server" | grep -v grep | wc -l ) -gt 4 ] && [ \\$(ps aux | grep "/.vscode-server/bin/.*/node .* net.createConnection" | grep -v grep | wc -l) -gt 0 ]',
+            "stop_command": "",
+            "user_msg": "",
+            "logfile_path": "",
+            "timeout_seconds": 120,
+            "icon_url": "",
+        }
+        apps.append(vs_code_app)
+
+        gpu_requested = 1 if analysis.has_gpu_requirements else 0
+
         return {
+            "apps": apps,
+            "resources": {
+                "gpu": {"requested": gpu_requested},
+                "sharedMemoryMB": 0,
+            },
+            "secrets": [],
             "mounts": [
                 {"type": "project", "target": "/project/", "description": "Project directory", "options": "rw"},
+                {"type": "volume", "target": "/nvwb-shared-volume/", "description": "", "options": "volumeName=nvwb-shared-volume"},
             ],
         }
 
@@ -389,25 +476,21 @@ class ConfigGenerator:
 
         lines = [
             "#!/bin/bash",
+            "# This file contains bash commands that will be executed at the end of the container build process,",
+            "# after all system packages and programming language specific package have been installed.",
+            "#",
+            "# System packages (apt) and Python packages (pip) are managed by Workbench via spec.yaml",
+            "# and configpacks. This script handles additional custom setup only.",
             "set -e",
-            "",
-            'echo "=== AI Workbench Project Setup ==="',
-            "",
-            "# Install system packages from apt.txt",
-            "if [ -f /project/.project/apt.txt ]; then",
-            '    echo "Installing system packages..."',
-            "    apt-get update -qq",
-            "    xargs -a /project/.project/apt.txt apt-get install -y -qq",
-            "fi",
         ]
 
         if has_node:
             lines.extend([
                 "",
-                "# Install Node.js LTS via NodeSource",
+                f"# Install Node.js {analysis.node_version}.x via NodeSource",
                 "if ! command -v node &> /dev/null; then",
-                '    echo "Installing Node.js LTS..."',
-                "    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -",
+                f'    echo "Installing Node.js {analysis.node_version}.x..."',
+                f"    curl -fsSL https://deb.nodesource.com/setup_{analysis.node_version}.x | bash -",
                 "    apt-get install -y -qq nodejs",
                 "fi",
             ])
@@ -417,7 +500,17 @@ class ConfigGenerator:
                     "# Install pnpm",
                     "if ! command -v pnpm &> /dev/null; then",
                     '    echo "Installing pnpm..."',
-                    "    npm install -g pnpm",
+                    "    npm install -g pnpm@latest",
+                    "    # Ensure pnpm is in PATH",
+                    "    export PNPM_HOME=$(npm config get prefix)/bin",
+                    "    export PATH=$PNPM_HOME:$PATH",
+                    "    # Verify installation",
+                    "    if ! command -v pnpm &> /dev/null; then",
+                    "        echo 'Failed to install pnpm, falling back to npm'",
+                    "        pkg_mgr='npm'",
+                    "    else",
+                    "        echo 'pnpm installed successfully'",
+                    "    fi",
                     "fi",
                     "",
                     "# Install Node.js dependencies",
@@ -450,14 +543,7 @@ class ConfigGenerator:
         if "python" in analysis.languages:
             lines.extend([
                 "",
-                "# Install Python dependencies",
-                "if [ -f /project/.project/requirements.txt ]; then",
-                '    echo "Installing Python requirements..."',
-                "    pip install --upgrade pip",
-                "    pip install -r /project/.project/requirements.txt",
-                "fi",
-                "",
-                "# Also install from repo root requirements.txt if present",
+                "# Install project Python dependencies from repo (if any)",
                 "if [ -f /project/requirements.txt ]; then",
                 '    echo "Installing project requirements..."',
                 "    pip install -r /project/requirements.txt",
@@ -525,3 +611,132 @@ class ConfigGenerator:
             'echo "=== Setup Complete ==="',
         ])
         return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def generate_prebuild_bash() -> str:
+        return (
+            "#!/bin/bash\n"
+            "# This file contains bash commands that will be executed at the beginning of the container build process,\n"
+            "# before any system packages or programming language specific package have been installed.\n"
+            "#\n"
+            "# Note: This file may be removed if you don't need to use it\n"
+        )
+
+    @staticmethod
+    def generate_configpacks(analysis: AnalysisResult) -> str:
+        """Generate configpacks file listing build phases for Workbench."""
+        lines = [
+            "*defaults.ContainerUser",
+            "*bash.PreBuild",
+            "*defaults.CA",
+            "*defaults.EnvVars",
+            "*defaults.Readme",
+            "*defaults.Entrypoint",
+            "*apt.PackageManager",
+            "*bash.PreLanguage",
+        ]
+        if "python" in analysis.languages:
+            lines.append("*python.PipPackageManager")
+        lines.extend([
+            "*bash.PostBuild",
+            "*jupyterlab.JupyterLab",
+            "*vs_code.VSCode",
+        ])
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def generate_gitattributes() -> str:
+        return "* text=auto eol=lf\nmodels/** filter=lfs diff=lfs merge=lfs -text\n"
+
+    @staticmethod
+    def generate_gitignore(existing_content: str = "") -> str:
+        """Generate .gitignore merging existing entries with required Workbench entries."""
+        workbench_entries = [
+            "",
+            "# Ignore generated or temporary files managed by the Workbench",
+            ".project/*",
+            "!.project/spec.yaml",
+            "!.project/configpacks",
+            "!.project/apt.txt",
+            "!.project/requirements.txt",
+            "!.project/postBuild.bash",
+            "!.project/preBuild.bash",
+            "",
+            "# General ignores",
+            "",
+            "# Byte-compiled / optimized / DLL files",
+            "__pycache__/",
+            "*.py[cod]",
+            "*$py.class",
+            "",
+            "# Temp directories, notebooks created by jupyterlab",
+            ".ipynb_checkpoints",
+            ".Trash-*/",
+            ".jupyter/",
+            "",
+            "# Python distribution / packaging",
+            ".Python",
+            "build/",
+            "develop-eggs/",
+            "dist/",
+            "downloads/",
+            "eggs/",
+            ".eggs/",
+            "lib/",
+            "lib64/",
+            "parts/",
+            "sdist/",
+            "var/",
+            "wheels/",
+            "share/python-wheels/",
+            "*.egg-info/",
+            ".installed.cfg",
+            "*.egg",
+            "MANIFEST",
+            "",
+            "# Unit test / coverage reports",
+            "htmlcov/",
+            ".tox/",
+            ".nox/",
+            ".coverage",
+            ".coverage.*",
+            ".cache",
+            "nosetests.xml",
+            "coverage.xml",
+            "*.cover",
+            "*.py,cover",
+            ".hypothesis/",
+            ".pytest_cache/",
+            "cover/",
+            "",
+            "# Workbench Project Layout",
+            "data/*",
+            "!data/.gitkeep",
+            "data/scratch/*",
+            "!data/scratch/.gitkeep",
+        ]
+
+        if existing_content.strip():
+            # Merge: keep existing entries, append Workbench entries that aren't already present
+            existing_lines = set(line.strip() for line in existing_content.splitlines() if line.strip() and not line.strip().startswith("#"))
+            merged = existing_content.rstrip("\n")
+            new_entries = []
+            for entry in workbench_entries:
+                stripped = entry.strip()
+                if not stripped or stripped.startswith("#"):
+                    new_entries.append(entry)
+                elif stripped not in existing_lines:
+                    new_entries.append(entry)
+            merged += "\n" + "\n".join(new_entries) + "\n"
+            return merged
+        else:
+            return "\n".join(workbench_entries).lstrip("\n") + "\n"
+
+    @staticmethod
+    def generate_variables_env() -> str:
+        return (
+            "# Set environment variables in the format KEY=VALUE, 1 per line\n"
+            "# This file will be sourced inside the project container when started.\n"
+            "# NOTE: If you change this file while the project is running, you must restart the project container for changes to take effect.\n"
+            "\n"
+        )

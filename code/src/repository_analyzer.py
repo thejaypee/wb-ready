@@ -33,6 +33,7 @@ class AnalysisResult:
     node_package_manager: str = "npm"  # npm, pnpm, or yarn
     node_scripts: dict[str, str] = field(default_factory=dict)
     node_start_port: int = 3000
+    node_version: str = "22"  # major version for NodeSource setup
 
 
 # Frameworks detected by scanning Python source for these strings
@@ -106,6 +107,7 @@ class RepositoryAnalyzer:
             result.node_frameworks = self._detect_node_frameworks(result.node_packages)
             result.node_package_manager = self._detect_node_package_manager()
             result.node_scripts = self._parse_node_scripts()
+            result.node_version = self._detect_node_version()
             result.entry_points.extend(self._find_node_entry_points(result))
 
         if "go" in result.languages:
@@ -132,10 +134,15 @@ class RepositoryAnalyzer:
                     break
         return languages
 
+    # Directories to skip when scanning for Python requirements
+    _SKIP_DIRS = {"venv", ".venv", "node_modules", "__pycache__", ".git", "docs", "doc", "documentation", ".tox", ".nox"}
+
     def _parse_python_requirements(self) -> list[str]:
         packages = []
-        # requirements.txt
+        # Scan all requirements files, but skip docs/tooling/venv directories
         for req_file in self.repo_path.rglob("requirements*.txt"):
+            if any(skip in req_file.parts for skip in self._SKIP_DIRS):
+                continue
             try:
                 for line in req_file.read_text().splitlines():
                     line = line.strip()
@@ -144,15 +151,17 @@ class RepositoryAnalyzer:
             except Exception:
                 continue
 
-        # pyproject.toml
-        pyproject = self.repo_path / "pyproject.toml"
-        if pyproject.exists() and tomllib is not None:
-            try:
-                data = tomllib.loads(pyproject.read_text())
-                deps = data.get("project", {}).get("dependencies", [])
-                packages.extend(deps)
-            except Exception:
-                pass
+        # pyproject.toml (root + subdirectories, skip docs/venv)
+        if tomllib is not None:
+            for pyproject in self.repo_path.rglob("pyproject.toml"):
+                if any(skip in pyproject.parts for skip in self._SKIP_DIRS):
+                    continue
+                try:
+                    data = tomllib.loads(pyproject.read_text())
+                    deps = data.get("project", {}).get("dependencies", [])
+                    packages.extend(deps)
+                except Exception:
+                    pass
 
         # Deduplicate while preserving order
         seen = set()
@@ -255,6 +264,33 @@ class RepositoryAnalyzer:
             return data.get("scripts", {})
         except Exception:
             return {}
+
+    def _detect_node_version(self) -> str:
+        """Read engines.node from package.json to pick the right major version."""
+        pkg_json = self.repo_path / "package.json"
+        if not pkg_json.exists():
+            return "22"
+        try:
+            import re
+            data = json.loads(pkg_json.read_text())
+            engine = data.get("engines", {}).get("node", "")
+            if not engine:
+                return "22"
+            # Extract the first major version number from the constraint
+            match = re.search(r'(\d+)', engine)
+            if match:
+                major = int(match.group(1))
+                # Map to available NodeSource versions
+                if major >= 22:
+                    return "22"
+                elif major >= 20:
+                    return "20"
+                elif major >= 18:
+                    return "18"
+                return "22"
+        except Exception:
+            pass
+        return "22"
 
     def _find_node_entry_points(self, result: AnalysisResult) -> list[dict[str, str]]:
         entry_points = []
@@ -372,8 +408,8 @@ class RepositoryAnalyzer:
         pkgs = ["git", "git-lfs", "curl", "wget"]
         if "python" in result.languages:
             pkgs.extend(["build-essential", "python3-dev"])
-        if "javascript" in result.languages or "typescript" in result.languages:
-            pkgs.extend(["nodejs", "npm"])
+        # Don't add nodejs/npm from apt — Ubuntu repos have ancient versions.
+        # Node.js setup belongs in postBuild.bash via NodeSource.
         if "cpp" in result.languages:
             pkgs.extend(["cmake", "g++"])
         if "go" in result.languages:

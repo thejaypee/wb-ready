@@ -15,6 +15,7 @@ import streamlit as st
 from github_client import GitHubClient, RepositoryInfo
 from repository_analyzer import RepositoryAnalyzer, AnalysisResult
 from config_generator import ConfigGenerator
+from llm_analyzer import LLMAnalyzer, LLMSuggestions
 
 st.set_page_config(page_title="WB-Ready", page_icon="wrench", layout="wide")
 
@@ -37,6 +38,16 @@ with st.sidebar:
         st.warning("Required for forking and private repos")
 
     st.divider()
+    st.header("AI Enhancement (Optional)")
+    llm_api_key = st.text_input(
+        "Claude/OpenAI API Key",
+        type="password",
+        value=os.getenv("ANTHROPIC_API_KEY", os.getenv("OPENAI_API_KEY", "")),
+        help="Optional: enhance analysis with AI",
+    )
+    enhance_with_ai = st.checkbox("Enhance with AI", value=bool(llm_api_key), disabled=not llm_api_key)
+
+    st.divider()
     st.markdown("[NVIDIA Workbench docs](https://docs.nvidia.com/ai-workbench/)")
     st.markdown("[Convert a repo (official guide)](https://docs.nvidia.com/ai-workbench/user-guide/latest/how-to/convert-repo.html)")
 
@@ -46,6 +57,8 @@ if "analysis" not in st.session_state:
     st.session_state.analysis = None
 if "repo_info" not in st.session_state:
     st.session_state.repo_info = None
+if "llm_suggestions" not in st.session_state:
+    st.session_state.llm_suggestions = None
 
 # ── Step 1: Repository URL ──────────────────────────────────────────────────
 
@@ -67,6 +80,14 @@ if st.button("Analyze", type="primary", disabled=not repo_url):
                 clone_path = client.clone_repository(repo_url, tmp)
                 analyzer = RepositoryAnalyzer(clone_path)
                 st.session_state.analysis = analyzer.analyze()
+
+                # Optional LLM enhancement (must run before tmp cleanup)
+                if enhance_with_ai and llm_api_key:
+                    try:
+                        llm = LLMAnalyzer(llm_api_key)
+                        st.session_state.llm_suggestions = llm.analyze(st.session_state.analysis, clone_path)
+                    except Exception:
+                        st.session_state.llm_suggestions = None
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
 
@@ -118,6 +139,25 @@ if st.session_state.analysis and st.session_state.repo_info:
     with st.expander("System packages"):
         st.code("\n".join(analysis.system_packages))
 
+    # LLM suggestions (if available)
+    if st.session_state.llm_suggestions:
+        suggestions: LLMSuggestions = st.session_state.llm_suggestions
+        with st.expander("AI Suggestions", expanded=True):
+            if suggestions.corrections:
+                st.markdown("**Corrections:**")
+                for c in suggestions.corrections:
+                    st.markdown(f"- {c}")
+            if suggestions.additional_setup:
+                st.markdown("**Additional setup steps:**")
+                for s in suggestions.additional_setup:
+                    st.markdown(f"- {s}")
+            if suggestions.warnings:
+                st.markdown("**Warnings:**")
+                for w in suggestions.warnings:
+                    st.warning(w)
+            if suggestions.suggested_base_image:
+                st.markdown(f"**Suggested base image:** `{suggestions.suggested_base_image}`")
+
     # ── Step 3: Configure ────────────────────────────────────────────────────
 
     st.divider()
@@ -134,18 +174,27 @@ if st.session_state.analysis and st.session_state.repo_info:
     # Preview
     if st.button("Preview generated files"):
         spec = ConfigGenerator.generate_spec_yaml(project_name, project_desc, analysis, target_branch)
-        st.markdown("**spec.yaml**")
+        st.markdown("**`.project/spec.yaml`**")
         st.code(spec, language="yaml")
 
-        st.markdown("**apt.txt**")
+        st.markdown("**`.project/configpacks`**")
+        st.code(ConfigGenerator.generate_configpacks(analysis))
+
+        st.markdown("**`.project/apt.txt`**")
         st.code(ConfigGenerator.generate_apt_txt(analysis.system_packages))
 
         if analysis.python_packages:
-            st.markdown("**requirements.txt**")
+            st.markdown("**`.project/requirements.txt`**")
             st.code(ConfigGenerator.generate_requirements_txt(analysis.python_packages))
 
-        st.markdown("**postBuild.bash**")
+        st.markdown("**`postBuild.bash` (root)**")
         st.code(ConfigGenerator.generate_postbuild_bash(analysis), language="bash")
+
+        st.markdown("**`.gitattributes`**")
+        st.code(ConfigGenerator.generate_gitattributes())
+
+        st.markdown("**`.gitignore` (Workbench entries)**")
+        st.code(ConfigGenerator.generate_gitignore())
 
     # ── Step 4: Convert ──────────────────────────────────────────────────────
 
@@ -177,12 +226,16 @@ if st.session_state.analysis and st.session_state.repo_info:
                 status.text("Generating Workbench configuration...")
                 progress.progress(35)
 
-                project_dir = Path(clone_path) / ".project"
+                root = Path(clone_path)
+                project_dir = root / ".project"
                 project_dir.mkdir(exist_ok=True)
 
-                # Generate files
+                # .project/ files (per official conversion docs)
                 spec = ConfigGenerator.generate_spec_yaml(project_name, project_desc, analysis, target_branch)
                 (project_dir / "spec.yaml").write_text(spec)
+
+                configpacks = ConfigGenerator.generate_configpacks(analysis)
+                (project_dir / "configpacks").write_text(configpacks)
 
                 apt = ConfigGenerator.generate_apt_txt(analysis.system_packages)
                 (project_dir / "apt.txt").write_text(apt)
@@ -191,14 +244,41 @@ if st.session_state.analysis and st.session_state.repo_info:
                     reqs = ConfigGenerator.generate_requirements_txt(analysis.python_packages)
                     (project_dir / "requirements.txt").write_text(reqs)
 
-                postbuild = ConfigGenerator.generate_postbuild_bash(analysis)
                 pb_path = project_dir / "postBuild.bash"
-                pb_path.write_text(postbuild)
+                pb_path.write_text(ConfigGenerator.generate_postbuild_bash(analysis))
                 pb_path.chmod(0o755)
 
-                # Create standard directories
-                (Path(clone_path) / "models").mkdir(exist_ok=True)
-                (Path(clone_path) / "data" / "scratch").mkdir(parents=True, exist_ok=True)
+                pre_path = project_dir / "preBuild.bash"
+                pre_path.write_text(ConfigGenerator.generate_prebuild_bash())
+                pre_path.chmod(0o755)
+
+                # Root-level stubs (reference project has these too)
+                root_pb = root / "postBuild.bash"
+                root_pb.write_text(ConfigGenerator.generate_prebuild_bash())  # stub
+                root_pb.chmod(0o755)
+
+                root_pre = root / "preBuild.bash"
+                root_pre.write_text(ConfigGenerator.generate_prebuild_bash())  # stub
+                root_pre.chmod(0o755)
+
+                (root / "variables.env").write_text(ConfigGenerator.generate_variables_env())
+
+                # .gitattributes
+                (root / ".gitattributes").write_text(ConfigGenerator.generate_gitattributes())
+
+                # Merge Workbench entries into .gitignore (preserve existing)
+                existing_gitignore = ""
+                gitignore_path = root / ".gitignore"
+                if gitignore_path.exists():
+                    existing_gitignore = gitignore_path.read_text()
+                (root / ".gitignore").write_text(ConfigGenerator.generate_gitignore(existing_gitignore))
+
+                # Create standard directories with .gitkeep files
+                (root / "models").mkdir(exist_ok=True)
+                (root / "data" / "scratch").mkdir(parents=True, exist_ok=True)
+                (root / "data" / ".gitkeep").touch()
+                (root / "data" / "scratch" / ".gitkeep").touch()
+                (root / "code").mkdir(exist_ok=True)
 
                 status.text("Creating fresh Workbench-ready repo...")
                 progress.progress(55)
