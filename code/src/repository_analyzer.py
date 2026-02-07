@@ -29,6 +29,10 @@ class AnalysisResult:
     cuda_version: str = ""
     has_dockerfile: bool = False
     has_compose: bool = False
+    node_frameworks: set[str] = field(default_factory=set)
+    node_package_manager: str = "npm"  # npm, pnpm, or yarn
+    node_scripts: dict[str, str] = field(default_factory=dict)
+    node_start_port: int = 3000
 
 
 # Frameworks detected by scanning Python source for these strings
@@ -41,6 +45,21 @@ FRAMEWORK_MARKERS = {
     "tensorflow": ["import tensorflow", "from tensorflow"],
     "gradio": ["import gradio", "from gradio"],
     "jupyter": [".ipynb"],
+}
+
+# Node.js framework markers detected in package.json dependencies
+NODE_FRAMEWORK_MARKERS = {
+    "nextjs": ["next"],
+    "express": ["express"],
+    "nestjs": ["@nestjs/core"],
+    "nuxt": ["nuxt"],
+    "vite": ["vite"],
+    "remix": ["@remix-run/node"],
+    "astro": ["astro"],
+    "svelte": ["svelte"],
+    "react": ["react"],
+    "vue": ["vue"],
+    "angular": ["@angular/core"],
 }
 
 GPU_PACKAGES = {
@@ -85,6 +104,10 @@ class RepositoryAnalyzer:
 
         if "javascript" in result.languages or "typescript" in result.languages:
             result.node_packages = self._parse_node_packages()
+            result.node_frameworks = self._detect_node_frameworks(result.node_packages)
+            result.node_package_manager = self._detect_node_package_manager()
+            result.node_scripts = self._parse_node_scripts()
+            result.entry_points.extend(self._find_node_entry_points(result))
 
         result.system_packages = self._suggest_system_packages(result)
         result.base_image = self._suggest_base_image(result)
@@ -203,10 +226,98 @@ class RepositoryAnalyzer:
                 })
         return entry_points
 
+    def _detect_node_frameworks(self, node_packages: dict[str, str]) -> set[str]:
+        frameworks = set()
+        pkg_names = set(node_packages.keys())
+        for framework, markers in NODE_FRAMEWORK_MARKERS.items():
+            if any(m in pkg_names for m in markers):
+                frameworks.add(framework)
+        return frameworks
+
+    def _detect_node_package_manager(self) -> str:
+        if (self.repo_path / "pnpm-lock.yaml").exists():
+            return "pnpm"
+        if (self.repo_path / "yarn.lock").exists():
+            return "yarn"
+        return "npm"
+
+    def _parse_node_scripts(self) -> dict[str, str]:
+        pkg_json = self.repo_path / "package.json"
+        if not pkg_json.exists():
+            return {}
+        try:
+            data = json.loads(pkg_json.read_text())
+            return data.get("scripts", {})
+        except Exception:
+            return {}
+
+    def _find_node_entry_points(self, result: AnalysisResult) -> list[dict[str, str]]:
+        entry_points = []
+        scripts = result.node_scripts
+        pkg_mgr = result.node_package_manager
+
+        # Detect the primary app type and port from scripts
+        if "nextjs" in result.node_frameworks:
+            port = self._extract_port(scripts.get("dev", "") + scripts.get("start", ""), 3000)
+            result.node_start_port = port
+            entry_points.append({
+                "file": "package.json",
+                "type": "nextjs",
+                "name": "Next.js App",
+            })
+        elif "nuxt" in result.node_frameworks:
+            port = self._extract_port(scripts.get("dev", "") + scripts.get("start", ""), 3000)
+            result.node_start_port = port
+            entry_points.append({
+                "file": "package.json",
+                "type": "nuxt",
+                "name": "Nuxt App",
+            })
+        elif "vite" in result.node_frameworks:
+            port = self._extract_port(scripts.get("dev", "") + scripts.get("preview", ""), 5173)
+            result.node_start_port = port
+            entry_points.append({
+                "file": "package.json",
+                "type": "vite",
+                "name": "Vite App",
+            })
+        elif "express" in result.node_frameworks or "nestjs" in result.node_frameworks:
+            port = self._extract_port(scripts.get("start", ""), 3000)
+            result.node_start_port = port
+            name = "NestJS" if "nestjs" in result.node_frameworks else "Express"
+            entry_points.append({
+                "file": "package.json",
+                "type": "node-server",
+                "name": f"{name} Server",
+            })
+        elif scripts.get("start") or scripts.get("dev"):
+            # Generic Node.js app with a start script
+            port = self._extract_port(scripts.get("start", "") + scripts.get("dev", ""), 3000)
+            result.node_start_port = port
+            entry_points.append({
+                "file": "package.json",
+                "type": "node-app",
+                "name": "Node App",
+            })
+
+        return entry_points
+
+    @staticmethod
+    def _extract_port(command: str, default: int) -> int:
+        """Try to find a port number in a command string."""
+        import re
+        # Match patterns like --port 3000, -p 3000, PORT=3000, :3000
+        match = re.search(r'(?:--port[= ]|PORT[= ]|-p[= ])(\d+)', command)
+        if match:
+            return int(match.group(1))
+        return default
+
     def _suggest_system_packages(self, result: AnalysisResult) -> list[str]:
         pkgs = ["git", "git-lfs", "curl", "wget"]
         if "python" in result.languages:
             pkgs.extend(["build-essential", "python3-dev"])
+        if "javascript" in result.languages or "typescript" in result.languages:
+            pkgs.extend(["nodejs", "npm"])
         if "cpp" in result.languages:
             pkgs.extend(["cmake", "g++"])
         if "go" in result.languages:

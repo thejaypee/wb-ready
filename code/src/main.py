@@ -107,6 +107,14 @@ if st.session_state.analysis and st.session_state.repo_info:
 
     with st.expander("Python dependencies"):
         st.code("\n".join(analysis.python_packages) if analysis.python_packages else "(none)")
+    with st.expander("Node.js dependencies"):
+        if analysis.node_packages:
+            st.markdown(f"**Package manager:** `{analysis.node_package_manager}`")
+            if analysis.node_frameworks:
+                st.markdown(f"**Frameworks:** {', '.join(sorted(analysis.node_frameworks))}")
+            st.code("\n".join(f"{k}: {v}" for k, v in sorted(analysis.node_packages.items())))
+        else:
+            st.write("(none)")
     with st.expander("System packages"):
         st.code("\n".join(analysis.system_packages))
 

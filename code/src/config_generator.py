@@ -45,7 +45,11 @@ class ConfigGenerator:
         image = parts[1] if len(parts) > 1 else parts[0]
 
         is_gpu = analysis.has_gpu_requirements
-        labels = ["ubuntu", "python3"]
+        labels = ["ubuntu"]
+        if "python" in analysis.languages:
+            labels.append("python3")
+        if "javascript" in analysis.languages or "typescript" in analysis.languages:
+            labels.append("nodejs")
         if "pytorch" in analysis.detected_frameworks:
             labels.append("pytorch")
         if "tensorflow" in analysis.detected_frameworks:
@@ -85,7 +89,7 @@ class ConfigGenerator:
                 "entrypoint_script": "",
                 "labels": labels,
                 "apps": base_apps,
-                "programming_languages": ["python3"] if "python" in analysis.languages else [],
+                "programming_languages": ConfigGenerator._programming_languages(analysis),
                 "icon_url": "",
                 "image_version": "",
                 "os": "linux",
@@ -124,7 +128,7 @@ class ConfigGenerator:
 
         # Generate app entries for each detected entry point
         for ep in analysis.entry_points:
-            app = ConfigGenerator._app_for_entry_point(ep)
+            app = ConfigGenerator._app_for_entry_point(ep, analysis)
             if app:
                 apps.append(app)
 
@@ -156,7 +160,7 @@ class ConfigGenerator:
         }
 
     @staticmethod
-    def _app_for_entry_point(ep: dict) -> dict | None:
+    def _app_for_entry_point(ep: dict, analysis: AnalysisResult = None) -> dict | None:
         t = ep["type"]
         f = ep["file"]
         name = ep["name"]
@@ -223,7 +227,65 @@ class ConfigGenerator:
                 "icon_url": "",
                 "webapp_options": {"autolaunch": True, "port": "7860", "proxy": {"trim_prefix": False}, "url": "http://localhost:7860"},
             }
+        elif t in ("nextjs", "nuxt", "vite", "node-server", "node-app"):
+            return ConfigGenerator._node_app_entry(ep, analysis)
         return None
+
+    @staticmethod
+    def _node_app_entry(ep: dict, analysis: AnalysisResult) -> dict:
+        name = ep["name"]
+        t = ep["type"]
+        port = analysis.node_start_port if analysis else 3000
+        pkg_mgr = analysis.node_package_manager if analysis else "npm"
+
+        # Determine the start command based on type
+        if t == "nextjs":
+            start_cmd = f"cd /project && {pkg_mgr} run build && {pkg_mgr} run start -- -p {port}"
+            health = f"curl -f http://localhost:{port}/"
+            stop = "pkill -f 'next start'"
+        elif t == "nuxt":
+            start_cmd = f"cd /project && {pkg_mgr} run build && {pkg_mgr} run start"
+            health = f"curl -f http://localhost:{port}/"
+            stop = "pkill -f nuxt"
+        elif t == "vite":
+            start_cmd = f"cd /project && {pkg_mgr} run build && {pkg_mgr} run preview -- --host 0.0.0.0 --port {port}"
+            health = f"curl -f http://localhost:{port}/"
+            stop = "pkill -f vite"
+        else:
+            # Generic node-server or node-app
+            start_cmd = f"cd /project && {pkg_mgr} start"
+            health = f"curl -f http://localhost:{port}/"
+            stop = "pkill -f node"
+
+        return {
+            "name": name,
+            "type": "custom",
+            "class": "webapp",
+            "start_command": start_cmd,
+            "health_check_command": health,
+            "stop_command": stop,
+            "user_msg": "",
+            "logfile_path": "",
+            "timeout_seconds": 120,
+            "icon_url": "",
+            "webapp_options": {
+                "autolaunch": True,
+                "port": str(port),
+                "proxy": {"trim_prefix": False},
+                "url": f"http://localhost:{port}",
+            },
+        }
+
+    @staticmethod
+    def _programming_languages(analysis: AnalysisResult) -> list[str]:
+        langs = []
+        if "python" in analysis.languages:
+            langs.append("python3")
+        if "javascript" in analysis.languages:
+            langs.append("javascript")
+        if "typescript" in analysis.languages:
+            langs.append("typescript")
+        return langs
 
     @staticmethod
     def _friendly_image_name(image: str) -> str:
@@ -247,6 +309,9 @@ class ConfigGenerator:
 
     @staticmethod
     def generate_postbuild_bash(analysis: AnalysisResult) -> str:
+        has_node = "javascript" in analysis.languages or "typescript" in analysis.languages
+        pkg_mgr = analysis.node_package_manager if hasattr(analysis, "node_package_manager") else "npm"
+
         lines = [
             "#!/bin/bash",
             "set -e",
@@ -259,25 +324,72 @@ class ConfigGenerator:
             "    apt-get update -qq",
             "    xargs -a /project/.project/apt.txt apt-get install -y -qq",
             "fi",
-            "",
-            "# Install Python dependencies",
-            "if [ -f /project/.project/requirements.txt ]; then",
-            '    echo "Installing Python requirements..."',
-            "    pip install --upgrade pip",
-            "    pip install -r /project/.project/requirements.txt",
-            "fi",
-            "",
-            "# Also install from repo root requirements.txt if present",
-            "if [ -f /project/requirements.txt ]; then",
-            '    echo "Installing project requirements..."',
-            "    pip install -r /project/requirements.txt",
-            "fi",
-            "",
-            "# Install Node.js dependencies if needed",
-            "if [ -f /project/package.json ]; then",
-            '    echo "Installing Node.js dependencies..."',
-            "    npm install --prefix /project",
-            "fi",
+        ]
+
+        if has_node:
+            lines.extend([
+                "",
+                "# Install Node.js LTS via NodeSource",
+                "if ! command -v node &> /dev/null; then",
+                '    echo "Installing Node.js LTS..."',
+                "    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -",
+                "    apt-get install -y -qq nodejs",
+                "fi",
+            ])
+            if pkg_mgr == "pnpm":
+                lines.extend([
+                    "",
+                    "# Install pnpm",
+                    "if ! command -v pnpm &> /dev/null; then",
+                    '    echo "Installing pnpm..."',
+                    "    npm install -g pnpm",
+                    "fi",
+                    "",
+                    "# Install Node.js dependencies",
+                    'echo "Installing Node.js dependencies with pnpm..."',
+                    "cd /project && pnpm install",
+                ])
+            elif pkg_mgr == "yarn":
+                lines.extend([
+                    "",
+                    "# Install yarn",
+                    "if ! command -v yarn &> /dev/null; then",
+                    '    echo "Installing yarn..."',
+                    "    npm install -g yarn",
+                    "fi",
+                    "",
+                    "# Install Node.js dependencies",
+                    'echo "Installing Node.js dependencies with yarn..."',
+                    "cd /project && yarn install",
+                ])
+            else:
+                lines.extend([
+                    "",
+                    "# Install Node.js dependencies",
+                    "if [ -f /project/package.json ]; then",
+                    '    echo "Installing Node.js dependencies with npm..."',
+                    "    cd /project && npm install",
+                    "fi",
+                ])
+
+        if "python" in analysis.languages:
+            lines.extend([
+                "",
+                "# Install Python dependencies",
+                "if [ -f /project/.project/requirements.txt ]; then",
+                '    echo "Installing Python requirements..."',
+                "    pip install --upgrade pip",
+                "    pip install -r /project/.project/requirements.txt",
+                "fi",
+                "",
+                "# Also install from repo root requirements.txt if present",
+                "if [ -f /project/requirements.txt ]; then",
+                '    echo "Installing project requirements..."',
+                "    pip install -r /project/requirements.txt",
+                "fi",
+            ])
+
+        lines.extend([
             "",
             "# Initialize Git LFS",
             "git lfs install",
@@ -286,5 +398,5 @@ class ConfigGenerator:
             "mkdir -p /project/data /project/models /project/data/scratch",
             "",
             'echo "=== Setup Complete ==="',
-        ]
+        ])
         return "\n".join(lines) + "\n"
