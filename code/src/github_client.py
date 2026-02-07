@@ -69,6 +69,44 @@ class GitHubClient:
                 return existing.clone_url
             raise ValueError(f"Fork failed: {e}") from e
 
+    def create_fresh_repo(self, source_owner: str, source_repo: str, local_clone_path: str) -> str:
+        """Create a new repo with only the latest files (no history). Fast for Workbench cloning."""
+        user = self.github.get_user()
+        repo_name = f"{source_owner}-{source_repo}"
+
+        # Delete existing repo if it exists
+        try:
+            existing = self.github.get_repo(f"{user.login}/{repo_name}")
+            existing.delete()
+            time.sleep(2)
+        except GithubException:
+            pass
+
+        # Create new empty repo
+        try:
+            new_repo = user.create_repo(
+                repo_name,
+                description=f"Workbench-ready version of {source_owner}/{source_repo}",
+                auto_init=False,
+                private=False,
+            )
+        except GithubException as e:
+            raise ValueError(f"Failed to create repo: {e}") from e
+
+        # Re-init the local clone as a fresh repo pointing to the new remote
+        import shutil
+        git_dir = os.path.join(local_clone_path, ".git")
+        if os.path.exists(git_dir):
+            shutil.rmtree(git_dir)
+
+        repo = git.Repo.init(local_clone_path)
+        remote_url = new_repo.clone_url
+        if self.token and "github.com" in remote_url:
+            remote_url = remote_url.replace("https://", f"https://x-access-token:{self.token}@")
+        repo.create_remote("origin", remote_url)
+
+        return new_repo.clone_url
+
     def push_changes(self, local_repo_path: str, commit_message: str, branch: str = "main") -> None:
         """Stage all changes, commit, and push."""
         try:
