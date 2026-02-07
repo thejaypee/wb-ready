@@ -89,7 +89,7 @@ environment:
     compose_file_path: ""
 execution:
     apps:
-        - name: WB-Ready Converter
+        - name: Converter
           type: custom
           class: webapp
           start_command: cd /project/code && streamlit run src/main.py --server.baseUrlPath=$PROXY_PREFIX
