@@ -1,0 +1,5 @@
+curl
+git
+git-lfs
+python3-dev
+build-essential
