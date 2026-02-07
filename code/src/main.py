@@ -6,14 +6,15 @@ import tempfile
 import shutil
 from pathlib import Path
 
-# Ensure code/ is on the import path so modules resolve when Streamlit runs from /project/code
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Add src/ to path for imports (works from /project/code or locally)
+src_path = Path(__file__).resolve().parent
+sys.path.insert(0, str(src_path))
 
 import streamlit as st
 
-from src.github_client import GitHubClient, RepositoryInfo
-from src.repository_analyzer import RepositoryAnalyzer, AnalysisResult
-from src.config_generator import ConfigGenerator
+from github_client import GitHubClient, RepositoryInfo
+from repository_analyzer import RepositoryAnalyzer, AnalysisResult
+from config_generator import ConfigGenerator
 
 st.set_page_config(page_title="WB-Ready", page_icon="wrench", layout="wide")
 

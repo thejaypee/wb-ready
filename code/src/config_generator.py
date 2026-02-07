@@ -1,7 +1,7 @@
 """Generates NVIDIA AI Workbench configuration files from analysis results."""
 
 import yaml
-from src.repository_analyzer import AnalysisResult
+from repository_analyzer import AnalysisResult
 
 
 class ConfigGenerator:
