@@ -62,11 +62,10 @@ NODE_FRAMEWORK_MARKERS = {
     "angular": ["@angular/core"],
 }
 
-GPU_PACKAGES = {
-    "torch", "pytorch", "tensorflow", "tensorflow-gpu",
-    "jax", "jaxlib", "cupy", "rapids", "numba",
-    "nvidia-cuda", "nvidia-cudnn", "onnxruntime-gpu",
-}
+# Only explicitly GPU-dependent packages that require GPU hardware
+# Excluding general ML packages that can run on CPU
+# GPU detection disabled - all projects use CPU-only setup
+GPU_PACKAGES = set()
 
 LANGUAGE_EXTENSIONS = {
     "python": ["*.py"],
@@ -179,10 +178,7 @@ class RepositoryAnalyzer:
             return {}
 
     def _check_gpu(self, packages: list[str]) -> bool:
-        for pkg in packages:
-            name = pkg.lower().split("==")[0].split(">=")[0].strip()
-            if any(g in name for g in GPU_PACKAGES):
-                return True
+        # GPU detection disabled - all projects are CPU-only
         return False
 
     def _detect_frameworks(self) -> set[str]:
@@ -388,15 +384,9 @@ class RepositoryAnalyzer:
             pkgs.extend(["openjdk-17-jdk", "maven"])
         if "ruby" in result.languages:
             pkgs.extend(["ruby-full", "build-essential"])
-        if result.has_gpu_requirements:
-            pkgs.append("nvidia-cuda-toolkit")
+        # No GPU packages - CPU-only setup
         return sorted(set(pkgs))
 
     def _suggest_base_image(self, result: AnalysisResult) -> str:
-        if "pytorch" in result.detected_frameworks:
-            return "nvcr.io/nvidia/pytorch:24.01-py3"
-        if "tensorflow" in result.detected_frameworks:
-            return "nvcr.io/nvidia/tensorflow:24.01-tf2-py3"
-        if result.has_gpu_requirements:
-            return "nvcr.io/nvidia/cuda:12.3.0-runtime-ubuntu22.04"
+        # Always use CPU-only base image
         return "nvcr.io/nvidia/ai-workbench/python-basic:1.0.2"

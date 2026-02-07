@@ -44,7 +44,7 @@ class ConfigGenerator:
         registry = parts[0] if len(parts) > 1 else "nvcr.io"
         image = parts[1] if len(parts) > 1 else parts[0]
 
-        is_gpu = analysis.has_gpu_requirements
+        # CPU-only setup - ignore GPU detection
         labels = ["ubuntu"]
         if "python" in analysis.languages:
             labels.append("python3")
@@ -115,10 +115,8 @@ class ConfigGenerator:
         }
 
         # Add secrets for common API keys
-        secrets = []
-        if is_gpu:
-            secrets.append({"variable": "NVIDIA_API_KEY", "description": "NVIDIA API key from build.nvidia.com"})
-        env["secrets"] = secrets
+        # No GPU secrets needed for CPU-only setup
+        env["secrets"] = []
 
         return env
 
@@ -146,12 +144,12 @@ class ConfigGenerator:
             "icon_url": "",
         })
 
-        gpu_count = 1 if analysis.has_gpu_requirements else 0
+        # Always use CPU-only resources
         return {
             "apps": apps,
             "resources": {
-                "gpu": {"requested": gpu_count},
-                "sharedMemoryMB": 2048 if analysis.has_gpu_requirements else 1024,
+                "gpu": {"requested": 0},
+                "sharedMemoryMB": 1024,
             },
             "secrets": [],
             "mounts": [
@@ -160,7 +158,7 @@ class ConfigGenerator:
         }
 
     @staticmethod
-    def _app_for_entry_point(ep: dict, analysis: AnalysisResult = None) -> dict | None:
+    def _app_for_entry_point(ep: dict, analysis: AnalysisResult) -> dict | None:
         t = ep["type"]
         f = ep["file"]
         name = ep["name"]
