@@ -249,7 +249,8 @@ class RepositoryAnalyzer:
         return frameworks
 
     def _detect_node_package_manager(self) -> str:
-        if (self.repo_path / "pnpm-lock.yaml").exists():
+        # Check for pnpm indicators
+        if (self.repo_path / "pnpm-lock.yaml").exists() or (self.repo_path / "pnpm-workspace.yaml").exists():
             return "pnpm"
         if (self.repo_path / "yarn.lock").exists():
             return "yarn"
